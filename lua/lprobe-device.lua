@@ -10,8 +10,9 @@ end
 m.handle  = nil;
 m.irq = { };
 
-m.init = function(self, backend, devicename)
+m.init = function(self, backend, base, devicename)
    self.backend = require(backend);
+   self.base    = base; 
    self.handle = self.backend.open(devicename)
    if (self.handle ~= nil) then
       return true;
@@ -61,6 +62,23 @@ m.request_mem = function(self, name)
    local ret = self.ioMemory(mem, self, ptr, self.backend);
    return ret
 end
+
+--- 
+-- Request a memory buffer, attach it to a register map 
+-- and return the resulting bitmap
+-- @param self 
+-- @param name name of memory region
+--
+-- @return memory buffer 
+--
+m.request_bitmap = function(self, name, regmapname)
+   local mem = self:request_mem(name);
+   if (nil == mem) then
+      return nil;
+   end
+   return self.base.bitmap(name, regmapname, mem)
+end
+
 
 local function ispending(self, idx)
    local i,j;
@@ -117,13 +135,15 @@ m.handle_irqs = function(self, timeout)
    local i,j;
    if (ret) then
       for j,i in ipairs({self.backend.irq_pending(self.handle.fd)}) do
-	 print(self.irq["0"])
 	 if (nil == self.irq[i]) then
 	    error("Unhandled irq "..i);
 	 end
 	 self.irq[i].handler(self.irq[i].arg);
 	 self.backend.irq_ack(self.handle.fd, i);
       end
+      return true;
+   else
+      return false;
    end
 end
 
@@ -168,4 +188,9 @@ m.handle_event = function(self, fd, event)
    
 end
 
-return m
+
+m.uptime_ms = function(self)
+   return self.backend.uptime_ms();
+end
+
+return m;

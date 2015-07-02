@@ -2,8 +2,6 @@ require "class"
 
 local m = { };
 
-m.Device = require("lprobe-device");
-
 m.EVT_IRQ_DISPATCH=1;
 m.EVT_IRQ_DISABLED=2;
 m.EVT_IRQ_HWFAULT=3;
@@ -27,7 +25,7 @@ m.debug = false;
 -- @return 
 --
 m.open = function(self, devname)
-   return m.Device("lprobelnx", devname);
+   return require("lprobe-device")("lprobelnx", self, devname);
 end
 
 m.loop = function(devhandle)
@@ -45,5 +43,12 @@ end
 m.loopbreak = function(devhandle)
    
 end
+
+m.bitmap = function(name, mapname, regs)
+   local rmap = require("bitmaps/"..mapname);
+   local rm = require("lprobe-bitmap")(name, rmap, regs);
+   return rm;
+end
+
 
 return m;

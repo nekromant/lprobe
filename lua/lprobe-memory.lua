@@ -86,8 +86,12 @@ m.get_parent = function(self)
    return self.parent
 end
 
+m.offset = function(self, offset)
+   return self.internal_offset + offset
+end
+
 m.__do_io = function(self, iotype, offset, value)
-   local address = self.internal_offset + offset;
+   local address = self:offset(offset);
 
    local ret = nil;
    if (value) then
@@ -96,7 +100,7 @@ m.__do_io = function(self, iotype, offset, value)
       end
       self.backend.write(self.handle, address, iotype, value);
    else
-      ret=self.backend.read(self.handle, self.internal_offset + offset, iotype);
+      ret=self.backend.read(self.handle, address, iotype);
       if (self.tracefunc ~= nil) then
 	 self:tracefunc("r", offset, iotype, ret);
       end
@@ -162,6 +166,7 @@ m.init = function(self, info, device, handle, backend)
    end
 end
 
+
 --- Get physical address of the data buffer
 --  Returns a physical address to the buffer, optionally adding offset bytes to it
 --
@@ -174,7 +179,7 @@ m.phys = function(self, offset)
    if (nil == offset) then
       offset = 0
    end
-   return self.physaddr + self.internal_offset + offset;
+   return self:offset(self.physaddr + offset);
 end
 
 --- Return a subregion of this buffer.
@@ -209,26 +214,19 @@ m.slice = function(self, offset, len)
    return new
 end
 
-
-m.regdump32 = function(self, label, offset, length)
-   for off = offset, length, 4 do
-      local byte = self:u32(off)
-      print(string.format("0x%x = 0x%x",off,byte));
-   end
-end
-
 --- 
 -- Print a hex dump of the given buffer to stdout, preceding it with 'label' 
 -- If offset and length are omited - offset will be assumed as 0 and length will
 -- be assumed to be the full length of the buffer
 -- @param self 
--- @param label text la 
--- @param offset 
--- @param length 
+-- @param label optional text label
+-- @param phys_off true to use physical memory offsets in dump 
+-- @param offset optional start offset (default 0)
+-- @param length optional length (default buffer length)
 --
 -- @return 
 --
-m.hexdump = function(self, label, offset, length ) 
+m.hexdump = function(self, label, phys_off, offset, length)
    if (nil==offset) then
       offset=0;
    end
@@ -238,7 +236,7 @@ m.hexdump = function(self, label, offset, length )
    end
 
    if (label ~= nil) then
-      print("--- "..label.." ---");
+      print(string.format("--- "..label.." --- @ PHYS 0x%x len 0x%x ---", self:phys(offset), length));
    end
 
    local str1 = "" 
@@ -252,7 +250,11 @@ m.hexdump = function(self, label, offset, length )
 	 if (nb > 1) then
 	    print(str1..str2.." |");
 	 end
-	 str1=string.format('%08X : ', off)
+	 if phys_off == true then
+	    str1=string.format('%08X : ', off)
+	 else
+	    str1=string.format('%08X : ', self:phys(off))
+	 end
 	 str2=" | "
 	 nb = 0;
       end
@@ -300,12 +302,45 @@ end
 -- @return 
 --
 m.memset = function(self, value)
+   if (nil ~=  self.backend.memset) then
+      return self.backend.memset(self.handle, self:offset(0), value, self.size);
+   end
+   -- Fallback if no support in backend
    local n = self.size - 1 ;
    while n >= 0 do 
       self:u8(n, value);
       n=n-1;
    end   
 end
+
+--- Compare with a different memory buffer
+-- 
+-- @param self 
+-- @param buffer target buffer
+--
+-- @return  An integer less than, equal to, or greater than zero if the first n bytes of self is found, respectively, to be less than, to match, or be greater than the first n bytes of buffer.
+m.compare = function(self, buffer, size)  
+   if (nil ~=  self.backend.memcmp) then
+      return self.backend.memcmp(self.handle, self:offset(0), value, size);
+   end
+   -- FixMe: Implement fallback
+   error("NOT IMPLEMENTED")
+end	
+
+
+--- Fill the buffer with random data (from /dev/urandom on linux)
+--
+-- @param self 
+--
+-- @return 
+--
+m.random = function(self)  
+   if (nil ~=  self.backend.random) then
+      return self.backend.random(self.handle, self:offset(0), self.size);
+   end
+   -- FixMe: Implement fallback
+   error("NOT IMPLEMENTED")
+end	
 
 --- Write a text string into the target buffer at the given offset
 --
@@ -323,6 +358,49 @@ m.fromstring = function(self, off, str)
       self:u8(off+n,str:byte(n+1))       
    end
 end
+
+
+--- Fill memory buffer with file contents
+--
+-- @param self 
+-- @param filename 
+--
+-- @return 
+--
+m.fromfile = function(self, filename, offset, length)
+   if (nil == offset) then
+      offset = 0;
+   end
+   local len = 0;
+   local maxlen = self.size - offset;
+   if (length == nil) then
+      length = maxlen;
+   end
+   
+   if (length > maxlen) then
+      error("Reading beyound buffer boundary");
+   end
+   
+   return self.backend.read_from_file(self.handle, offset, length, filename);
+end
+
+
+
+--- Dump memory buffer to a file
+--
+-- @param self 
+-- @param filename 
+--
+-- @return 
+--
+m.tofile = function(self, filename, offset)
+   if (nil == offset) then
+      offset = 0;
+   end
+   local len = self.size - offset;
+   return self.backend.write_to_file(self.handle, offset, len, filename);
+end
+
 
 --- Fill the 'margins' with a single byte value. 
 -- The value is stored internally to do check_margins()
@@ -400,7 +478,5 @@ m.protected = function(self, margin_length)
    new:check_margins(0x0);
    return new; 
 end
-
-
 
 return m;
