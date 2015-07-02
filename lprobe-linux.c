@@ -16,11 +16,16 @@
 #include <stdint.h>
 #include <lua.h>
 #include <lauxlib.h>
+#include <sys/time.h>
 #include <sys/ioctl.h>
 #include <linux/lprobe.h>
 #include <poll.h>
 
 #define panic() { exit(1); }
+#define require_args(nargs, n)						\
+	if (nargs != n)							\
+		return luaL_error(L, "Invalid arg count to %s (need %d but got %d)", __func__, n, nargs);
+
 
 void lua_stack_dump (lua_State *L)
 {
@@ -74,7 +79,9 @@ static int l_refresh(lua_State *L)
 {
 
 	int nargs = lua_gettop(L);
-	if ((nargs < 1) || (!lua_istable(L,-1))) 
+	require_args(nargs, 2);
+
+	if ((!lua_istable(L,-1))) 
 		return luaL_error(L, "Invalid args to l_refresh");	
 
 	const char *path = lp_get_stringfield(L, "device");
@@ -107,8 +114,7 @@ static int l_refresh(lua_State *L)
 static int l_open (lua_State *L) 
 {
 	int nargs = lua_gettop(L);
-	if (nargs != 1) 
-		return luaL_error(L, "Invalid arg count to l_open");
+	require_args(nargs, 1);
 	
 	const char* devname = lua_tostring(L, -1);  
 	
@@ -135,8 +141,7 @@ static int l_open (lua_State *L)
 static int l_request_mem (lua_State *L) 
 {
 	int nargs = lua_gettop(L);
-	if (nargs != 3) 
-		return luaL_error(L, "Invalid arg count to l_request_mem");
+	require_args(nargs, 3);
 	
 	int fd     = lua_tonumber(L, 1); 
 	int mmapid = lua_tonumber(L, 2); 
@@ -154,8 +159,8 @@ static int l_request_mem (lua_State *L)
 static int l_read (lua_State *L) 
 {
 	int nargs = lua_gettop(L);
-	if (nargs != 3) 
-		return luaL_error(L, "Invalid arg count to l_read");
+	require_args(nargs, 3);
+
 	uint8_t *mmapmem = lua_touserdata(L, 1); 
 	int offset    = lua_tonumber(L, 2);
 	int type      = lua_tonumber(L, 3);
@@ -214,8 +219,8 @@ static int l_read (lua_State *L)
 static int l_irq_ack (lua_State *L) 
 {
 	int nargs = lua_gettop(L);
-	if (nargs != 2) 
-		return luaL_error(L, "Invalid arg count to l_ack_irq");
+	require_args(nargs, 2);
+
 	int fd     = lua_tonumber(L, 1);
 	int irqnum = lua_tonumber(L, 2);
 	int ret = ioctl(fd, IOCTL_LPROBE_IRQACK, &irqnum);
@@ -229,8 +234,7 @@ static int l_irq_ack (lua_State *L)
 static int l_irq_pending (lua_State *L) 
 {
 	int nargs = lua_gettop(L);
-	if (nargs != 1) 
-		return luaL_error(L, "Invalid arg count to l_irq_pending");
+	require_args(nargs, 1);
 
 	int fd       = lua_tonumber(L, 1);	
 	uint32_t flags;
@@ -251,8 +255,7 @@ static int l_irq_pending (lua_State *L)
 static int l_irq_wait (lua_State *L) 
 {
 	int nargs = lua_gettop(L);
-	if (nargs != 2) 
-		return luaL_error(L, "Invalid arg count to l_irq_wait");
+	require_args(nargs, 2);
 	
 	int fd      = lua_tonumber(L, 1);
 	int timeout = lua_tonumber(L, 2);
@@ -271,8 +274,7 @@ static int l_irq_wait (lua_State *L)
 static int l_write (lua_State *L) 
 {
 	int nargs = lua_gettop(L);
-	if (nargs != 4) 
-		return luaL_error(L, "Invalid arg count to l_write");
+	require_args(nargs, 4);
 
 	uint8_t *mmapmem = lua_touserdata(L, 1); 
 	int offset    = lua_tonumber(L, 2);
@@ -329,28 +331,132 @@ static int l_write (lua_State *L)
 	return 0;
 }
 
+static int l_read_from_file (lua_State *L) 
+{
+	int nargs = lua_gettop(L);
+	require_args(nargs, 4);
+
+	uint8_t *mmapmem = lua_touserdata(L, 1); 
+	int offset       = lua_tonumber(L, 2);
+	int len          = lua_tonumber(L, 3);
+	const char* fl   = lua_tostring(L, 4);
+	mmapmem = &mmapmem[offset];
+	
+	FILE *fd = fopen(fl, "r");
+	if (!fd)
+		return luaL_error(L, "Failed to open file: %s", fl);
+	int ret = fread(mmapmem, len, 1, fd);
+	lua_pushboolean(L, ret);
+	fclose(fd);
+	return 1;
+}
+
+static int l_write_to_file (lua_State *L) 
+{
+	int nargs = lua_gettop(L);
+	require_args(nargs, 4);
+
+	uint8_t *mmapmem = lua_touserdata(L, 1); 
+	int offset       = lua_tonumber(L, 2);
+	int len          = lua_tonumber(L, 3);
+	const char* fl   = lua_tostring(L, 4);
+	mmapmem = &mmapmem[offset];
+	
+	FILE *fd = fopen(fl, "w");
+	if (!fd)
+		return luaL_error(L, "Failed to open file: %s", fl);
+	int ret = fwrite(mmapmem, len, 1, fd);
+	lua_pushboolean(L, ret);
+	fclose(fd);
+	return 1;
+}
+
+
 static int l_pagesize (lua_State *L) 
 {
 	lua_pushnumber(L, getpagesize());
 	return 1;
 }
 
+static int l_memcmp (lua_State *L) 
+{
+	int nargs = lua_gettop(L);
+	require_args(nargs, 4);
+
+	uint8_t *mmapmem1 = lua_touserdata(L, 1); 
+	uint8_t *mmapmem2 = lua_touserdata(L, 2); 
+	int offset       = lua_tonumber(L, 3);
+	int len          = lua_tonumber(L, 4);
+	int ret = memcmp(&mmapmem1[offset], &mmapmem2[offset], len);
+	lua_pushnumber(L, ret);
+	return 1;
+}
+
+static int l_memset (lua_State *L) 
+{
+	int nargs = lua_gettop(L);
+	require_args(nargs, 4);
+	uint8_t *mmapmem1 = lua_touserdata(L, 1); 
+	int off           = lua_tonumber(L, 2);
+	int c             = lua_tonumber(L, 3);
+	int len           = lua_tonumber(L, 4);
+	memset(&mmapmem1[off], c, len);
+	return 0;
+}
+
+static int l_random (lua_State *L) 
+{
+	int nargs = lua_gettop(L);
+	require_args(nargs, 3);
+	uint8_t *mmapmem  = lua_touserdata(L, 1); 
+	int off           = lua_tonumber(L, 2);
+	int len           = lua_tonumber(L, 3);
+
+	int fd = open("/dev/urandom", O_RDONLY);
+	if (!fd)
+		return luaL_error(L, "Failed to open /dev/urandom");
+	int ret = read(fd, &mmapmem[off], len);
+	lua_pushboolean(L, ret);
+	close(fd);
+	return 1;
+}
+
+static struct timeval	tv, tv0;
+static int l_get_uptime_ms(lua_State *L) 
+{
+	gettimeofday(&tv, NULL);
+	float v = (tv.tv_sec-tv0.tv_sec) + 0.000001*((float)(tv.tv_usec-tv0.tv_usec));
+	lua_pushnumber(L, v);
+	return 1;
+}
+
 static const luaL_Reg libfuncs[] = {
-        {"open",         l_open},
-        {"refresh",      l_refresh},
-        {"request_mem",  l_request_mem},
-        {"write",        l_write},
-        {"read",         l_read},
-	{"irq_ack",      l_irq_ack},
-	{"irq_pending",  l_irq_pending},
-	{"irq_wait",     l_irq_wait},
-	{"pagesize",     l_pagesize},
-        {NULL,           NULL}
+        {"open",           l_open},
+        {"refresh",        l_refresh},
+        {"request_mem",    l_request_mem},
+
+        {"write",          l_write},
+        {"read",           l_read},
+
+	{"write_to_file",  l_write_to_file},
+	{"read_from_file", l_read_from_file},
+
+	{"irq_ack",        l_irq_ack},
+	{"irq_pending",    l_irq_pending},
+	{"irq_wait",       l_irq_wait},
+
+	{"uptime_ms",      l_get_uptime_ms},
+	{"pagesize",       l_pagesize},
+	{"memcmp",         l_memcmp}, //optional
+	{"memset",         l_memset}, //optional
+	{"random",         l_random}, //optional
+        {NULL,             NULL}
 };
 
 LUALIB_API int luaopen_lprobelnx (lua_State *L) 
 {
 	printf("L-Probe/Linux 0.1: Loaded!\n");
 	luaL_newlib(L, libfuncs);
+	gettimeofday(&tv0, NULL);
 	return 1;
 }
