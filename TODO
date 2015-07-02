@@ -1,0 +1,5 @@
+This is a generic lprobe TODO: 
+* Fix cross-compilation scripts (right now lua extension is compiled on target)
+* More luadoc (WiP)
+* Implement Bare-Metal target (WiP)
+* Implement VPI target (Planned)
